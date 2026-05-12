@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String     @id @default(uuid())
+  name      String
+  email     String     @unique
+  password  String
+  role      String     @default("client")
+  createdAt DateTime   @default(now())
+  businesses Business[]
+}
+
+model Business {
+  id              String     @id @default(uuid())
+  userId          String
+  businessName    String
+  botName         String     @default("Professor")
+  virtualNumber   String     @default("+1 415 523 8886")
+  businessSlug    String     @unique
+  greetingMessage String     @default("Hi 👋")
+  paymentQrUrl    String     @default("")
+  createdAt       DateTime   @default(now())
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  flows           Flow[]
+  documents       Document[]
+  chats           Chat[]
+  deposits        Deposit[]
+}
+
+model Flow {
+  id          String   @id @default(uuid())
+  businessId  String
+  optionTitle String
+  replyType   String   @default("text")
+  replyValue  String
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+model Document {
+  id         String   @id @default(uuid())
+  businessId String
+  title      String
+  fileUrl    String
+  keywords   String   @default("")
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+model Chat {
+  id             String   @id @default(uuid())
+  businessId     String
+  customerNumber String
+  message        String
+  response       String
+  timestamp      DateTime @default(now())
+  business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+model Deposit {
+  id             String   @id @default(uuid())
+  businessId     String
+  customerName   String
+  customerNumber String
+  whatsappNumber String   @default("")
+  transactionId  String   @unique
+  amount         Float
+  status         String   @default("pending")
+  timestamp      DateTime @default(now())
+  business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
