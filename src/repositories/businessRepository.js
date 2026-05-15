@@ -58,6 +58,20 @@ const businessRepository = {
     }
   },
 
+  async findAll() {
+    logger.info('BusinessRepo', 'Finding all businesses');
+    try {
+      const businesses = await prisma.business.findMany({
+        include: { flows: { orderBy: { sortOrder: 'asc' } } },
+      });
+      logger.info('BusinessRepo', `Found ${businesses.length} businesses`);
+      return businesses;
+    } catch (err) {
+      logger.error('BusinessRepo', 'Failed to find all businesses', err.message);
+      throw err;
+    }
+  },
+
   async update(id, data) {
     logger.info('BusinessRepo', `Updating business: ${id}`);
     try {
