@@ -34,15 +34,10 @@ const webhookService = {
       return { message: '❌ Cancelled.\n\n_Send "menu" to see options again._' };
     }
 
-    // Twilio sandbox join message (e.g. "join means-rapidly") — auto-start the first business
+    // Twilio sandbox join message (e.g. "join means-rapidly")
     if (trimmedBody.toLowerCase().startsWith('join ')) {
       logger.info('WebhookService', `Twilio sandbox join detected from: ${from}`);
-      const allBusinesses = await businessRepository.findAll();
-      if (allBusinesses && allBusinesses.length > 0) {
-        const slug = allBusinesses[0].businessSlug;
-        return this.handleStart(from, slug, trimmedBody);
-      }
-      return { message: 'No business is configured yet. Please ask the admin to set up a business.' };
+      return { message: '✅ *You\'re connected!*\n\nNow tap the bot link you received to start chatting. 🚀' };
     }
 
     // start_slug command
