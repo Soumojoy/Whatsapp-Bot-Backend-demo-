@@ -1,18 +1,23 @@
 const businessRepository = require('../repositories/businessRepository');
 const chatRepository = require('../repositories/chatRepository');
 const depositRepository = require('../repositories/depositRepository');
+const onboardRepository = require('../repositories/onboardRepository');
 const sessionManager = require('../utils/sessionManager');
 const logger = require('../utils/logger');
 
-// Helper to build menu with optional deposit
+// Helper to build menu with optional onboarding and deposit
 function buildMenu(business) {
   const menuOptions = business.flows
     .map((flow, i) => `${i + 1}. ${flow.optionTitle}`)
     .join('\n');
   let fullMenu = menuOptions;
+  let nextNum = business.flows.length + 1;
+  if (business.onboardingEnabled) {
+    fullMenu += `\n${nextNum}. 📝 Create Account`;
+    nextNum++;
+  }
   if (business.paymentQrUrl) {
-    const depositOptionNum = business.flows.length + 1;
-    fullMenu += `\n${depositOptionNum}. 💰 Deposit`;
+    fullMenu += `\n${nextNum}. 💰 Deposit`;
   }
   return fullMenu;
 }
@@ -22,10 +27,13 @@ const webhookService = {
     logger.info('WebhookService', `Incoming message from: ${from}, body: "${body}"`);
     const trimmedBody = body.trim();
 
-    // Check if user is in a multi-step deposit session
+    // Check if user is in a multi-step session
     const session = sessionManager.get(from);
     if (session && session.flow === 'deposit') {
       return this.handleDepositStep(from, trimmedBody, session);
+    }
+    if (session && session.flow === 'onboard') {
+      return this.handleOnboardStep(from, trimmedBody, session);
     }
 
     // "cancel" keyword — cancel any ongoing session
@@ -114,7 +122,33 @@ const webhookService = {
     let matchedFlow = null;
     const choiceNum = parseInt(userChoice, 10);
     const hasDeposit = !!business.paymentQrUrl;
-    const depositOptionNum = business.flows.length + 1;
+    const hasOnboarding = !!business.onboardingEnabled;
+    let nextNum = business.flows.length + 1;
+    const onboardOptionNum = hasOnboarding ? nextNum++ : -1;
+    const depositOptionNum = hasDeposit ? nextNum : -1;
+
+    // Check if user selected "Create Account" option
+    if (hasOnboarding && (choiceNum === onboardOptionNum || userChoice.toLowerCase() === 'create account')) {
+      logger.info('WebhookService', `User selected Create Account from: ${from}`);
+      sessionManager.set(from, {
+        flow: 'onboard',
+        step: 'show_message',
+        businessId: business.id,
+        data: {},
+      });
+
+      const onboardMsg = business.onboardingMessage || 'Welcome! Let us help you get started.';
+      const msg = `📝 *Create Account*\n\n${onboardMsg}\n\n_Type *next* to continue or *cancel* to go back._`;
+
+      await chatRepository.create({
+        businessId: business.id,
+        customerNumber: from,
+        message: userChoice,
+        response: msg,
+      });
+
+      return { message: msg };
+    }
 
     // Check if user selected the auto-added Deposit option (only if QR is set)
     if (hasDeposit && (choiceNum === depositOptionNum || userChoice.toLowerCase() === 'deposit')) {
@@ -350,6 +384,191 @@ const webhookService = {
       sessionManager.clear(from);
       return { message: '❌ Something went wrong saving your deposit. Please try again.\n\n_Send "menu" to start over._' };
     }
+  },
+
+  // =============================================
+  // MULTI-STEP ONBOARDING FLOW
+  // =============================================
+  async handleOnboardStep(from, input, session) {
+    logger.info('WebhookService', `Onboard step: ${session.step}, input: "${input}", from: ${from}`);
+
+    // Allow cancel at any step
+    if (input.toLowerCase() === 'cancel') {
+      sessionManager.clear(from);
+      return { message: '❌ Onboarding cancelled.\n\n_Send "menu" to see options again._' };
+    }
+
+    switch (session.step) {
+      case 'show_message':
+        return this.onboardShowOptions(from, input, session);
+
+      case 'show_options':
+        return this.onboardAskName(from, input, session);
+
+      case 'ask_name':
+        return this.onboardAskUserId(from, input, session);
+
+      case 'ask_userid':
+        return this.onboardComplete(from, input, session);
+
+      case 'post_choice':
+        return this.onboardPostChoice(from, input, session);
+
+      default:
+        sessionManager.clear(from);
+        return { message: 'Something went wrong. _Send "menu" to start again._' };
+    }
+  },
+
+  async onboardShowOptions(from, input, session) {
+    // User must type "next" to proceed
+    if (input.toLowerCase() !== 'next') {
+      return { message: '_Type *next* to continue or *cancel* to go back._' };
+    }
+
+    const business = await businessRepository.findById(session.businessId);
+    const optionsStr = business.onboardingOptions || '';
+    const options = optionsStr.split(',').map(o => o.trim()).filter(o => o.length > 0);
+
+    if (options.length === 0) {
+      // No options configured, skip to ask name
+      sessionManager.update(from, { step: 'ask_name', data: { selectedOption: '' } });
+      return { message: 'Please enter your *full name*:' };
+    }
+
+    const optionsList = options.map((opt, i) => `${i + 1}. ${opt}`).join('\n');
+
+    sessionManager.update(from, { step: 'show_options', data: { options } });
+
+    return { message: `Choose your option:\n${optionsList}\n\n_Reply with the option number._` };
+  },
+
+  async onboardAskName(from, input, session) {
+    const options = session.data.options || [];
+    const choiceNum = parseInt(input, 10);
+
+    let selectedOption = '';
+    if (options.length > 0) {
+      if (isNaN(choiceNum) || choiceNum < 1 || choiceNum > options.length) {
+        const optionsList = options.map((opt, i) => `${i + 1}. ${opt}`).join('\n');
+        return { message: `❌ Invalid choice.\n\nChoose your option:\n${optionsList}\n\n_Reply with the option number._` };
+      }
+      selectedOption = options[choiceNum - 1];
+    }
+
+    sessionManager.update(from, { step: 'ask_name', data: { selectedOption } });
+
+    return { message: `✅ *${selectedOption}* selected!\n\nPlease enter your *full name*:` };
+  },
+
+  async onboardAskUserId(from, name, session) {
+    if (name.length < 2) {
+      return { message: '❌ Name is too short. Please enter your *full name*:' };
+    }
+
+    sessionManager.update(from, { step: 'ask_userid', data: { name } });
+
+    return { message: `Thanks *${name}*! 👍\n\nEnter your *User ID* (or type *skip*):` };
+  },
+
+  async onboardComplete(from, input, session) {
+    const userId = input.toLowerCase() === 'skip' ? '' : input;
+
+    // Save onboard account
+    try {
+      await onboardRepository.create({
+        businessId: session.businessId,
+        customerName: session.data.name,
+        userId,
+        whatsappNumber: from,
+        selectedOption: session.data.selectedOption || '',
+      });
+
+      sessionManager.update(from, { step: 'post_choice', data: { userId } });
+
+      const greeting = userId
+        ? `✅ Welcome *${session.data.name}* (ID: ${userId})! Account created. 🎉`
+        : `✅ Welcome *${session.data.name}*! Account created. 🎉`;
+
+      const msg = `${greeting}\n\nWhat would you like to do?\n1. 💰 Deposit\n2. 📋 Main Menu`;
+
+      await chatRepository.create({
+        businessId: session.businessId,
+        customerNumber: from,
+        message: `Onboard: ${session.data.name}, ID:${userId}, Option:${session.data.selectedOption}`,
+        response: msg,
+      });
+
+      return { message: msg };
+    } catch (err) {
+      logger.error('WebhookService', 'Failed to save onboard account', err.message);
+      sessionManager.clear(from);
+      return { message: '❌ Something went wrong. Please try again.\n\n_Send "menu" to start over._' };
+    }
+  },
+
+  async onboardPostChoice(from, input, session) {
+    const choice = parseInt(input, 10);
+
+    if (choice === 1) {
+      // Transition to deposit flow with name/userId pre-filled
+      const business = await businessRepository.findById(session.businessId);
+      if (!business || !business.paymentQrUrl) {
+        sessionManager.clear(from);
+        return { message: 'Deposit is not available. Admin has not configured a payment QR yet.\n\n_Send "menu" to see options again._' };
+      }
+
+      sessionManager.set(from, {
+        flow: 'deposit',
+        step: 'ask_name',
+        businessId: session.businessId,
+        data: {},
+      });
+
+      // If we already have name from onboarding, pre-fill and skip to ask_user_id
+      if (session.data.name) {
+        sessionManager.set(from, {
+          flow: 'deposit',
+          step: 'ask_user_id',
+          businessId: session.businessId,
+          data: { name: session.data.name },
+        });
+
+        if (session.data.userId) {
+          // Also have userId, skip to show QR
+          sessionManager.set(from, {
+            flow: 'deposit',
+            step: 'ask_transaction_id',
+            businessId: session.businessId,
+            data: { name: session.data.name, userId: session.data.userId },
+          });
+
+          let qrMessage = `🆔 User ID: *${session.data.userId}* ✅\n\n`;
+          if (business.paymentQrUrl) {
+            qrMessage += `Please scan the QR code below to make payment:\n${business.paymentQrUrl}\n\n`;
+          }
+          qrMessage += `After payment, enter your *12-digit Transaction ID*:`;
+          return { message: qrMessage };
+        }
+
+        return { message: `Thanks *${session.data.name}*! 👍\n\nNow please enter your *User ID*:` };
+      }
+
+      return { message: `💰 *Deposit*\n\nLet's process your deposit.\n\nPlease enter your *full name*:\n\n_Send "cancel" anytime to go back._` };
+    }
+
+    if (choice === 2) {
+      // Show main menu
+      sessionManager.clear(from);
+      const business = await businessRepository.findById(session.businessId);
+      if (!business || !business.flows || business.flows.length === 0) {
+        return { message: 'No menu options available.' };
+      }
+      const fullMenu = buildMenu(business);
+      return { message: `Choose an option:\n${fullMenu}\n\n_Reply with the option number (1, 2, 3...)_` };
+    }
+
+    return { message: 'Please choose:\n1. 💰 Deposit\n2. 📋 Main Menu' };
   },
 };
 
