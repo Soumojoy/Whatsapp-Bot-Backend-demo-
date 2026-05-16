@@ -10,5 +10,6 @@ router.get('/:id', authMiddleware, businessController.getById);
 router.put('/:id', authMiddleware, businessController.update);
 router.delete('/:id', authMiddleware, businessController.remove);
 router.get('/:id/onboard-accounts', authMiddleware, businessController.getOnboardAccounts);
+router.get('/:id/chats', authMiddleware, businessController.getChats);
 
 module.exports = router;
