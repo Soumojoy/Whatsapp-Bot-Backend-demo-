@@ -26,12 +26,16 @@ model Business {
   businessSlug    String     @unique
   greetingMessage String     @default("Hi 👋")
   paymentQrUrl    String     @default("")
+  onboardingEnabled Boolean  @default(false)
+  onboardingMessage String   @default("")
+  onboardingOptions String   @default("")
   createdAt       DateTime   @default(now())
   user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   flows           Flow[]
   documents       Document[]
   chats           Chat[]
   deposits        Deposit[]
+  onboardAccounts OnboardAccount[]
 }
 
 model Flow {
@@ -75,5 +79,16 @@ model Deposit {
   amount         Float
   status         String   @default("pending")
   timestamp      DateTime @default(now())
+  business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+model OnboardAccount {
+  id             String   @id @default(uuid())
+  businessId     String
+  customerName   String
+  userId         String   @default("")
+  whatsappNumber String
+  selectedOption String
+  createdAt      DateTime @default(now())
   business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 }
