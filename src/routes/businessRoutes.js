@@ -9,5 +9,6 @@ router.get('/', authMiddleware, businessController.getAll);
 router.get('/:id', authMiddleware, businessController.getById);
 router.put('/:id', authMiddleware, businessController.update);
 router.delete('/:id', authMiddleware, businessController.remove);
+router.get('/:id/onboard-accounts', authMiddleware, businessController.getOnboardAccounts);
 
 module.exports = router;
