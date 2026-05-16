@@ -1,6 +1,7 @@
 const businessService = require('../services/businessService');
 const onboardRepository = require('../repositories/onboardRepository');
 const chatRepository = require('../repositories/chatRepository');
+const paymentOptionRepository = require('../repositories/paymentOptionRepository');
 const logger = require('../utils/logger');
 
 const businessController = {
@@ -103,6 +104,72 @@ const businessController = {
       logger.error('BusinessController', 'Get chats failed', err.message);
       const status = err.message.includes('not found') ? 404 : 403;
       return res.status(status).json({ error: err.message });
+    }
+  },
+
+  async getPaymentOptions(req, res) {
+    logger.info('BusinessController', `GET /api/business/${req.params.id}/payment-options`);
+    try {
+      await businessService.getBusinessById(req.params.id, req.user.userId);
+      const options = await paymentOptionRepository.findByBusinessId(req.params.id);
+      return res.status(200).json(options);
+    } catch (err) {
+      logger.error('BusinessController', 'Get payment options failed', err.message);
+      const status = err.message.includes('not found') ? 404 : 403;
+      return res.status(status).json({ error: err.message });
+    }
+  },
+
+  async createPaymentOption(req, res) {
+    logger.info('BusinessController', `POST /api/business/${req.params.id}/payment-options`);
+    try {
+      await businessService.getBusinessById(req.params.id, req.user.userId);
+      const { batchId, paymentLink, qrImageUrl } = req.body;
+      if (!paymentLink && !qrImageUrl) {
+        return res.status(400).json({ error: 'At least one of paymentLink or qrImageUrl is required' });
+      }
+      const option = await paymentOptionRepository.create({
+        businessId: req.params.id,
+        batchId: batchId || '',
+        paymentLink: paymentLink || '',
+        qrImageUrl: qrImageUrl || '',
+      });
+      return res.status(201).json(option);
+    } catch (err) {
+      logger.error('BusinessController', 'Create payment option failed', err.message);
+      return res.status(400).json({ error: err.message });
+    }
+  },
+
+  async updatePaymentOption(req, res) {
+    logger.info('BusinessController', `PUT /api/business/${req.params.id}/payment-options/${req.params.optionId}`);
+    try {
+      await businessService.getBusinessById(req.params.id, req.user.userId);
+      const { batchId, paymentLink, qrImageUrl } = req.body;
+      if (!paymentLink && !qrImageUrl) {
+        return res.status(400).json({ error: 'At least one of paymentLink or qrImageUrl is required' });
+      }
+      const option = await paymentOptionRepository.update(req.params.optionId, {
+        batchId: batchId !== undefined ? batchId : undefined,
+        paymentLink: paymentLink !== undefined ? paymentLink : undefined,
+        qrImageUrl: qrImageUrl !== undefined ? qrImageUrl : undefined,
+      });
+      return res.status(200).json(option);
+    } catch (err) {
+      logger.error('BusinessController', 'Update payment option failed', err.message);
+      return res.status(400).json({ error: err.message });
+    }
+  },
+
+  async deletePaymentOption(req, res) {
+    logger.info('BusinessController', `DELETE /api/business/${req.params.id}/payment-options/${req.params.optionId}`);
+    try {
+      await businessService.getBusinessById(req.params.id, req.user.userId);
+      await paymentOptionRepository.delete(req.params.optionId);
+      return res.status(200).json({ message: 'Payment option deleted' });
+    } catch (err) {
+      logger.error('BusinessController', 'Delete payment option failed', err.message);
+      return res.status(400).json({ error: err.message });
     }
   },
 };
