@@ -62,6 +62,9 @@ const businessService = {
       botName: data.botName,
       greetingMessage: data.greetingMessage,
       paymentQrUrl: data.paymentQrUrl,
+      onboardingEnabled: data.onboardingEnabled,
+      onboardingMessage: data.onboardingMessage,
+      onboardingOptions: data.onboardingOptions,
     });
   },
 
