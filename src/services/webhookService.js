@@ -2,11 +2,48 @@ const businessRepository = require('../repositories/businessRepository');
 const chatRepository = require('../repositories/chatRepository');
 const depositRepository = require('../repositories/depositRepository');
 const onboardRepository = require('../repositories/onboardRepository');
+const paymentOptionRepository = require('../repositories/paymentOptionRepository');
 const sessionManager = require('../utils/sessionManager');
 const logger = require('../utils/logger');
 
+// Helper: check if deposit is configured for a business
+async function isDepositEnabled(business) {
+  if (business.paymentQrUrl) return true;
+  const options = await paymentOptionRepository.findByBusinessId(business.id);
+  return options.length > 0;
+}
+
+// Helper: build payment message for a given userId
+async function buildPaymentMessage(business, userId) {
+  const options = await paymentOptionRepository.findByBusinessId(business.id);
+
+  if (business.paymentMode === 'multiple' && options.length > 0) {
+    // Match userId prefix against batch IDs
+    const userIdLower = userId.toLowerCase();
+    const match = options.find(
+      (opt) => opt.batchId && userIdLower.startsWith(opt.batchId.toLowerCase())
+    );
+    if (!match) {
+      return { error: true, message: `❌ No payment option found for your User ID prefix.\n\nConfigured batches: ${options.map(o => o.batchId).join(', ')}\n\nPlease check your *User ID* and try again:` };
+    }
+    return { error: false, link: match.paymentLink, qr: match.qrImageUrl };
+  }
+
+  // Single mode: use first payment option if exists, else fall back to paymentQrUrl
+  if (options.length > 0) {
+    return { error: false, link: options[0].paymentLink, qr: options[0].qrImageUrl };
+  }
+
+  // Backward compat: old paymentQrUrl field
+  if (business.paymentQrUrl) {
+    return { error: false, link: '', qr: business.paymentQrUrl };
+  }
+
+  return { error: true, message: 'Deposit is not available. Admin has not configured payment options yet.\n\n_Send "menu" to see options again._' };
+}
+
 // Helper to build menu with optional onboarding and deposit
-function buildMenu(business) {
+function buildMenu(business, depositEnabled) {
   const menuOptions = business.flows
     .map((flow, i) => `${i + 1}. ${flow.optionTitle}`)
     .join('\n');
@@ -16,7 +53,7 @@ function buildMenu(business) {
     fullMenu += `\n${nextNum}. 📝 Create Account`;
     nextNum++;
   }
-  if (business.paymentQrUrl) {
+  if (depositEnabled) {
     fullMenu += `\n${nextNum}. 💰 Deposit`;
   }
   return fullMenu;
@@ -73,7 +110,8 @@ const webhookService = {
       return { message: 'Sorry, this bot link is not valid.' };
     }
 
-    const fullMenu = buildMenu(business);
+    const depositEnabled = await isDepositEnabled(business);
+    const fullMenu = buildMenu(business, depositEnabled);
 
     const greeting = `${business.greetingMessage}\n\nChoose an option:\n${fullMenu}\n\n_Reply with the option number (1, 2, 3...)_`;
 
@@ -100,7 +138,8 @@ const webhookService = {
     if (!business || !business.flows || business.flows.length === 0) {
       return { message: 'No menu options available.' };
     }
-    const fullMenu = buildMenu(business);
+    const depositEnabled = await isDepositEnabled(business);
+    const fullMenu = buildMenu(business, depositEnabled);
 
     return { message: `Choose an option:\n${fullMenu}\n\n_Reply with the option number (1, 2, 3...)_` };
   },
@@ -121,7 +160,7 @@ const webhookService = {
     // Match by number or title
     let matchedFlow = null;
     const choiceNum = parseInt(userChoice, 10);
-    const hasDeposit = !!business.paymentQrUrl;
+    const hasDeposit = await isDepositEnabled(business);
     const hasOnboarding = !!business.onboardingEnabled;
     let nextNum = business.flows.length + 1;
     const onboardOptionNum = hasOnboarding ? nextNum++ : -1;
@@ -182,7 +221,7 @@ const webhookService = {
     }
 
     if (!matchedFlow) {
-      const fullMenu = buildMenu(business);
+      const fullMenu = buildMenu(business, hasDeposit);
 
       const retryMessage = `Sorry, I didn't understand "${userChoice}".\n\nPlease choose an option:\n${fullMenu}\n\n_Reply with the option number (1, 2, 3...)_`;
 
@@ -299,19 +338,26 @@ const webhookService = {
       return { message: '❌ User ID cannot be empty. Please enter your *User ID*:' };
     }
 
+    const business = await businessRepository.findById(session.businessId);
+    const paymentInfo = await buildPaymentMessage(business, userId);
+
+    if (paymentInfo.error) {
+      // For batch mismatch, don't advance step — let user re-enter userId
+      return { message: paymentInfo.message };
+    }
+
     sessionManager.update(from, {
       step: 'ask_transaction_id',
       data: { userId },
     });
 
-    // Get business QR
-    const business = await businessRepository.findById(session.businessId);
     let qrMessage = `🆔 User ID: *${userId}* ✅\n\n`;
 
-    if (business && business.paymentQrUrl) {
-      qrMessage += `Please scan the QR code below to make payment:\n${business.paymentQrUrl}\n\n`;
-    } else {
-      qrMessage += `💳 Please complete your payment using the business payment method.\n\n`;
+    if (paymentInfo.link) {
+      qrMessage += `💳 *Payment Link:*\n${paymentInfo.link}\n\n`;
+    }
+    if (paymentInfo.qr) {
+      qrMessage += `📱 *QR Code:*\n${paymentInfo.qr}\n\n`;
     }
 
     qrMessage += `After payment, enter your *12-digit Transaction ID*:`;
@@ -513,9 +559,10 @@ const webhookService = {
     if (choice === 1) {
       // Transition to deposit flow with name/userId pre-filled
       const business = await businessRepository.findById(session.businessId);
-      if (!business || !business.paymentQrUrl) {
+      const depositAvail = await isDepositEnabled(business);
+      if (!business || !depositAvail) {
         sessionManager.clear(from);
-        return { message: 'Deposit is not available. Admin has not configured a payment QR yet.\n\n_Send "menu" to see options again._' };
+        return { message: 'Deposit is not available. Admin has not configured payment options yet.\n\n_Send "menu" to see options again._' };
       }
 
       sessionManager.set(from, {
@@ -535,7 +582,19 @@ const webhookService = {
         });
 
         if (session.data.userId) {
-          // Also have userId, skip to show QR
+          // Also have userId, try to show payment info
+          const paymentInfo = await buildPaymentMessage(business, session.data.userId);
+          if (paymentInfo.error) {
+            // Batch mismatch — ask for userId again
+            sessionManager.set(from, {
+              flow: 'deposit',
+              step: 'ask_user_id',
+              businessId: session.businessId,
+              data: { name: session.data.name },
+            });
+            return { message: paymentInfo.message };
+          }
+
           sessionManager.set(from, {
             flow: 'deposit',
             step: 'ask_transaction_id',
@@ -544,8 +603,11 @@ const webhookService = {
           });
 
           let qrMessage = `🆔 User ID: *${session.data.userId}* ✅\n\n`;
-          if (business.paymentQrUrl) {
-            qrMessage += `Please scan the QR code below to make payment:\n${business.paymentQrUrl}\n\n`;
+          if (paymentInfo.link) {
+            qrMessage += `💳 *Payment Link:*\n${paymentInfo.link}\n\n`;
+          }
+          if (paymentInfo.qr) {
+            qrMessage += `📱 *QR Code:*\n${paymentInfo.qr}\n\n`;
           }
           qrMessage += `After payment, enter your *12-digit Transaction ID*:`;
           return { message: qrMessage };
@@ -564,7 +626,8 @@ const webhookService = {
       if (!business || !business.flows || business.flows.length === 0) {
         return { message: 'No menu options available.' };
       }
-      const fullMenu = buildMenu(business);
+      const depositEnabled = await isDepositEnabled(business);
+      const fullMenu = buildMenu(business, depositEnabled);
       return { message: `Choose an option:\n${fullMenu}\n\n_Reply with the option number (1, 2, 3...)_` };
     }
 
