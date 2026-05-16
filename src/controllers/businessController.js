@@ -1,4 +1,5 @@
 const businessService = require('../services/businessService');
+const onboardRepository = require('../repositories/onboardRepository');
 const logger = require('../utils/logger');
 
 const businessController = {
@@ -74,6 +75,20 @@ const businessController = {
     } catch (err) {
       logger.error('BusinessController', 'Delete business failed', err.message);
       return res.status(400).json({ error: err.message });
+    }
+  },
+
+  async getOnboardAccounts(req, res) {
+    logger.info('BusinessController', `GET /api/business/${req.params.id}/onboard-accounts`);
+    try {
+      // Verify ownership
+      await businessService.getBusinessById(req.params.id, req.user.userId);
+      const accounts = await onboardRepository.findByBusinessId(req.params.id);
+      return res.status(200).json(accounts);
+    } catch (err) {
+      logger.error('BusinessController', 'Get onboard accounts failed', err.message);
+      const status = err.message.includes('not found') ? 404 : 403;
+      return res.status(status).json({ error: err.message });
     }
   },
 };
