@@ -62,6 +62,7 @@ const businessService = {
       botName: data.botName,
       greetingMessage: data.greetingMessage,
       paymentQrUrl: data.paymentQrUrl,
+      paymentMode: data.paymentMode,
       onboardingEnabled: data.onboardingEnabled,
       onboardingMessage: data.onboardingMessage,
       onboardingOptions: data.onboardingOptions,
