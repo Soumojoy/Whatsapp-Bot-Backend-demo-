@@ -1,5 +1,6 @@
 const businessService = require('../services/businessService');
 const onboardRepository = require('../repositories/onboardRepository');
+const chatRepository = require('../repositories/chatRepository');
 const logger = require('../utils/logger');
 
 const businessController = {
@@ -87,6 +88,19 @@ const businessController = {
       return res.status(200).json(accounts);
     } catch (err) {
       logger.error('BusinessController', 'Get onboard accounts failed', err.message);
+      const status = err.message.includes('not found') ? 404 : 403;
+      return res.status(status).json({ error: err.message });
+    }
+  },
+
+  async getChats(req, res) {
+    logger.info('BusinessController', `GET /api/business/${req.params.id}/chats`);
+    try {
+      await businessService.getBusinessById(req.params.id, req.user.userId);
+      const chats = await chatRepository.findByBusinessId(req.params.id);
+      return res.status(200).json(chats);
+    } catch (err) {
+      logger.error('BusinessController', 'Get chats failed', err.message);
       const status = err.message.includes('not found') ? 404 : 403;
       return res.status(status).json({ error: err.message });
     }
