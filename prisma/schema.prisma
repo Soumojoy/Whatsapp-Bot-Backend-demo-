@@ -26,6 +26,7 @@ model Business {
   businessSlug    String     @unique
   greetingMessage String     @default("Hi 👋")
   paymentQrUrl    String     @default("")
+  paymentMode     String     @default("single")
   onboardingEnabled Boolean  @default(false)
   onboardingMessage String   @default("")
   onboardingOptions String   @default("")
@@ -36,6 +37,7 @@ model Business {
   chats           Chat[]
   deposits        Deposit[]
   onboardAccounts OnboardAccount[]
+  paymentOptions  PaymentOption[]
 }
 
 model Flow {
@@ -91,4 +93,14 @@ model OnboardAccount {
   selectedOption String
   createdAt      DateTime @default(now())
   business       Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+}
+
+model PaymentOption {
+  id          String   @id @default(uuid())
+  businessId  String
+  batchId     String   @default("")
+  paymentLink String   @default("")
+  qrImageUrl  String   @default("")
+  createdAt   DateTime @default(now())
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 }
